@@ -28,8 +28,10 @@ distances<-c(500,1000,2000,3000,5000)
 distances<-sort(distances) # Ensure that your distances are sorted smallest to largest
 
 buffers<-list() # Make a list of buffers
-geoms<-list() # Make a list of rings
+rings<-list() # Make a list of rings
 
+
+## Create a function that takes 
 # Generate buffers for each point
 input_geom<-cent
 for (d in 1:length(distances)){
@@ -39,22 +41,75 @@ for (d in 1:length(distances)){
     buffers[[as.character(distances[d])]]<-buff
     # Add to final geoms as data.table
       buff$dist<-as.character(distances[[d]]) # Add field of distance band
-      geoms[[as.character(distances[[d]])]]<-buff
+      rings[[as.character(distances[[d]])]]<-buff
   }else{ # If this is the second or later buffers, we only want the "ring"
     buff<-st_buffer(input_geom,distances[d]) # Make buffer
     buffers[[as.character(distances[d])]]<-buff
     diff<-st_erase(buff,buffers[[ as.character(distances[[(d-1)]]) ]]) # Get only ring
     buffers[[as.character(distances[[d-1]])]]<-NULL # Erase buffers with no usefulness
     diff$dist<-paste0(distances[[d-1]],":",distances[[d]]) # Add field of distance band
-    geoms[[as.character(distances[[d]])]]<-diff
+    rings[[as.character(distances[[d]])]]<-diff
   }
   if(d==length(distances)){
     rm(buffers,buff,diff) # Get rid of buffers 
   }
 }
-
 # Combine all the geometry into 1 
-geoms<-rbindlist(geoms)
+rings<-rbindlist(rings)
+
+
+###########################################
+# use "cookie cutter" to get information, 
+# by shifting the rings from one location
+# to the next:
+
+buffers<-list() # Make a list of buffers
+rings<-list() # Make a list of rings
+
+
+## Create a function that takes 
+# Generate buffers for each point
+input_geom<-cent[1,]
+for (d in 1:length(distances)){
+  if(d==1){
+    # If this is the first buffer, we want to keep it:
+    buff<-st_buffer(input_geom,distances[d])
+    buffers[[as.character(distances[d])]]<-buff
+    # Add to final geoms as data.table
+    buff$dist<-as.character(distances[[d]]) # Add field of distance band
+    rings[[as.character(distances[[d]])]]<-buff
+  }else{ # If this is the second or later buffers, we only want the "ring"
+    buff<-st_buffer(input_geom,distances[d]) # Make buffer
+    buffers[[as.character(distances[d])]]<-buff
+    diff<-st_erase(buff,buffers[[ as.character(distances[[(d-1)]]) ]]) # Get only ring
+    buffers[[as.character(distances[[d-1]])]]<-NULL # Erase buffers with no usefulness
+    diff$dist<-paste0(distances[[d-1]],":",distances[[d]]) # Add field of distance band
+    rings[[as.character(distances[[d]])]]<-diff
+  }
+  if(d==length(distances)){
+    rm(buffers,buff,diff) # Get rid of buffers 
+  }
+}
+# Combine all the geometry into 1 data data.frame with geometry
+rings<-st_sf(rbindlist(rings)[,list(geometry)]) # Combine rings into 1 feature
+rings<-st_geometry(rings)-st_centroid(st_geometry(rings)) # shift to 0,0 coord space, preserve only geometry
+rings<-st_sf(rings)
+
+cookie_cutter<-rings
+cookie_cutter<-st_geometry(rings)+st_centroid(st_geometry(king[1,]))
+st_crs(cookie_cutter)<-st_crs(sf_king)
+
+sf_king
+
+cookie<-st_sf(st_intersection(sf_king,cookie_cutter))
+
+king_rings<-list()
+for(c in 1:length(king)){
+  geom<-st_geometry(king[c])
+  king_rings<-rings+st_centroid(king[c,])
+trans<-st_geometry(a-(st_centroid(a))+st_centroid(b))
+}
+
 
 plot.new()
 plot(buff_1k$geometry,col="red")
