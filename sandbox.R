@@ -21,7 +21,6 @@ sf_king<-st_sf(king) # Converting back to simple features
 cent<-st_centroid(sf_king)
 
 # Define distances for ring buffers
-st_erase = function(x, y) st_difference(x, st_union(st_combine(y)))
 distances<-c(500,1000,2000,3000,5000)
 
 # Set up a series of rings expanding outward based on the distance bands
@@ -59,49 +58,75 @@ rings<-rbindlist(rings)
 
 
 ###########################################
-# use "cookie cutter" to get information, 
-# by shifting the rings from one location
-# to the next:
-
-buffers<-list() # Make a list of buffers
-rings<-list() # Make a list of rings
+# Generate a "Cookie Cutter" by creating 1
+# Set of concentric rings for each nb buffer,
+# then shift the rings from one location
+# to the next, gathering information
 
 
-## Create a function that takes 
-# Generate buffers for each point
-input_geom<-cent[1,]
-for (d in 1:length(distances)){
-  if(d==1){
-    # If this is the first buffer, we want to keep it:
-    buff<-st_buffer(input_geom,distances[d])
-    buffers[[as.character(distances[d])]]<-buff
-    # Add to final geoms as data.table
-    buff$dist<-as.character(distances[[d]]) # Add field of distance band
-    rings[[as.character(distances[[d]])]]<-buff
-  }else{ # If this is the second or later buffers, we only want the "ring"
-    buff<-st_buffer(input_geom,distances[d]) # Make buffer
-    buffers[[as.character(distances[d])]]<-buff
-    diff<-st_erase(buff,buffers[[ as.character(distances[[(d-1)]]) ]]) # Get only ring
-    buffers[[as.character(distances[[d-1]])]]<-NULL # Erase buffers with no usefulness
-    diff$dist<-paste0(distances[[d-1]],":",distances[[d]]) # Add field of distance band
-    rings[[as.character(distances[[d]])]]<-diff
+#' ConcentricRings
+#' Returns a sf polygon object with geometry centered at 0,0 in the coordinate system of the input geometry.
+
+ConcentricBufferRings<-function(input_geom, distances, at_origin=T){
+  
+  distances<-sort(distances) #ensure that distances are sorted such that smallest->largest
+  # Make empty lists for things to be stored later
+  buffers<-list() # Make a list of buffers
+  rings<-list() # Make a list of rings
+  
+  # Define function to get ony differences of shapes when compared to one another,
+  # leaving a ring outside the prior buffer
+  st_erase = function(x, y) st_difference(x, st_union(st_combine(y)))
+  
+  for (d in 1:length(distances)){
+    if(d==1){
+      # If this is the first buffer, we want to keep it:
+      buff<-st_buffer(input_geom,distances[d])
+      buffers[[as.character(distances[d])]]<-buff
+      # Add to final geoms as data.table
+      buff$dist<-as.character(distances[[d]]) # Add field of distance band
+      rings[[as.character(distances[[d]])]]<-buff
+    }else{ # If this is the second or later buffers, we only want the "ring"
+      buff<-st_buffer(input_geom,distances[d]) # Make buffer
+      buffers[[as.character(distances[d])]]<-buff
+      diff<-st_erase(buff,buffers[[ as.character(distances[[(d-1)]]) ]]) # Get only ring
+      buffers[[as.character(distances[[d-1]])]]<-NULL # Erase buffers with no usefulness
+      diff$dist<-paste0(distances[[d-1]],":",distances[[d]]) # Add field of distance band
+      rings[[as.character(distances[[d]])]]<-diff
+    }
+    if(d==length(distances)){
+      rm(buffers,buff,diff) # Get rid of buffers 
+    }
   }
-  if(d==length(distances)){
-    rm(buffers,buff,diff) # Get rid of buffers 
+  
+  # Create a "Cookie Cutter" template to move around to each point location
+  # Combine rings into 1 feature
+  rings<-st_sf(rbindlist(rings)[,list(geometry,dist)])
+  
+  if(at_origin){
+    # Shift to 0,0 coord space
+    rings$geometry<-st_geometry(rings)-st_centroid(st_geometry(rings)) 
   }
+  return(rings)
 }
-# Combine all the geometry into 1 data data.frame with geometry
-rings<-st_sf(rbindlist(rings)[,list(geometry)]) # Combine rings into 1 feature
-rings<-st_geometry(rings)-st_centroid(st_geometry(rings)) # shift to 0,0 coord space, preserve only geometry
-rings<-st_sf(rings)
+  
 
-cookie_cutter<-rings
-cookie_cutter<-st_geometry(rings)+st_centroid(st_geometry(king[1,]))
-st_crs(cookie_cutter)<-st_crs(sf_king)
+#' ShiftCentroid
+#' Shifts the centroid of a input sf object such that the centroid of the over-written
+#' geometry is now at the centroid of the output location geometry. 
+ShiftCentroid<-function(input_geom,output_location_geom,input_at_origin=T){
+  
+  if(!input_at_origin){ # if it's not already at the origin, shift to 0,0 coord space
+    input_geom$geometry<-st_geometry(input_geom)-st_centroid(st_geometry(input_geom))
+  }
+    # Over-write geometry to "shift" geometry to be centered the new centroid's location
+      input_geom$geometry<-st_geometry(input_geom)+st_centroid(st_geometry(output_location_geom))
+    # Set CRS
+      st_crs(input_geom)<-st_crs(output_location_geom)
+    return(input_geom)
+  }
 
-sf_king
-
-cookie<-st_sf(st_intersection(sf_king,cookie_cutter))
+cookie<-st_intersection(sf_king,cookie_cutter)
 
 king_rings<-list()
 for(c in 1:length(king)){
