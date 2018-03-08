@@ -16,46 +16,7 @@ bg_poly <- st_read("/Users/stubbsrw/Documents/git_code/AreaComp/data/nhgis_shape
 st_crs(bg_poly) # Looks like albers equal area conic, which is great!
 
 # To make things more tractable, let's only play with 1 state, Washington, in King County:
-king<-data.table(bg_poly)[STATEFP10=="53"&COUNTYFP10=="033"] # parsing it as a data.table
-sf_king<-st_sf(king) # Converting back to simple features
-cent<-st_centroid(sf_king)
-
-# Define distances for ring buffers
-distances<-c(500,1000,2000,3000,5000)
-
-# Set up a series of rings expanding outward based on the distance bands
-distances<-sort(distances) # Ensure that your distances are sorted smallest to largest
-
-buffers<-list() # Make a list of buffers
-rings<-list() # Make a list of rings
-
-
-## Create a function that takes 
-# Generate buffers for each point
-input_geom<-cent
-for (d in 1:length(distances)){
-  if(d==1){
-    # If this is the first buffer, we want to keep it:
-    buff<-st_buffer(input_geom,distances[d])
-    buffers[[as.character(distances[d])]]<-buff
-    # Add to final geoms as data.table
-      buff$dist<-as.character(distances[[d]]) # Add field of distance band
-      rings[[as.character(distances[[d]])]]<-buff
-  }else{ # If this is the second or later buffers, we only want the "ring"
-    buff<-st_buffer(input_geom,distances[d]) # Make buffer
-    buffers[[as.character(distances[d])]]<-buff
-    diff<-st_erase(buff,buffers[[ as.character(distances[[(d-1)]]) ]]) # Get only ring
-    buffers[[as.character(distances[[d-1]])]]<-NULL # Erase buffers with no usefulness
-    diff$dist<-paste0(distances[[d-1]],":",distances[[d]]) # Add field of distance band
-    rings[[as.character(distances[[d]])]]<-diff
-  }
-  if(d==length(distances)){
-    rm(buffers,buff,diff) # Get rid of buffers 
-  }
-}
-# Combine all the geometry into 1 
-rings<-rbindlist(rings)
-
+king<-st_sf(data.table(bg_poly)[STATEFP10=="53"&COUNTYFP10=="033",list(as.character(GISJOIN),geometry)][1:50]) # parsing it as a data.table, returning it to sf
 
 ###########################################
 # Generate a "Cookie Cutter" by creating 1
@@ -73,7 +34,7 @@ ConcentricBufferRings<-function(input_geom, distances, at_origin=T){
   # Make empty lists for things to be stored later
   buffers<-list() # Make a list of buffers
   rings<-list() # Make a list of rings
-  
+
   # Define function to get ony differences of shapes when compared to one another,
   # leaving a ring outside the prior buffer
   st_erase = function(x, y) st_difference(x, st_union(st_combine(y)))
@@ -85,14 +46,15 @@ ConcentricBufferRings<-function(input_geom, distances, at_origin=T){
       buffers[[as.character(distances[d])]]<-buff
       # Add to final geoms as data.table
       buff$dist<-as.character(distances[[d]]) # Add field of distance band
-      rings[[as.character(distances[[d]])]]<-buff
+      st_crs(buff)<-st_crs(input_geom)
+      rings[[as.character(distances[[d]])]]<-data.table(buff)
     }else{ # If this is the second or later buffers, we only want the "ring"
       buff<-st_buffer(input_geom,distances[d]) # Make buffer
       buffers[[as.character(distances[d])]]<-buff
       diff<-st_erase(buff,buffers[[ as.character(distances[[(d-1)]]) ]]) # Get only ring
       buffers[[as.character(distances[[d-1]])]]<-NULL # Erase buffers with no usefulness
       diff$dist<-paste0(distances[[d-1]],":",distances[[d]]) # Add field of distance band
-      rings[[as.character(distances[[d]])]]<-diff
+      rings[[as.character(distances[[d]])]]<-data.table(diff)
     }
     if(d==length(distances)){
       rm(buffers,buff,diff) # Get rid of buffers 
@@ -101,15 +63,16 @@ ConcentricBufferRings<-function(input_geom, distances, at_origin=T){
   
   # Create a "Cookie Cutter" template to move around to each point location
   # Combine rings into 1 feature
-  rings<-st_sf(rbindlist(rings)[,list(geometry,dist)])
+  rings<-st_sf(rbindlist(rings))
+  st_crs(rings)<-st_crs(input_geom)
   
   if(at_origin){
     # Shift to 0,0 coord space
-    rings$geometry<-st_geometry(rings)-st_centroid(st_geometry(rings)) 
+    rings$geometry<-st_geometry(rings)-st_centroid(st_geometry(rings))
   }
   return(rings)
 }
-  
+
 
 #' ShiftCentroid
 #' Shifts the centroid of a input sf object such that the centroid of the over-written
@@ -119,37 +82,22 @@ ShiftCentroid<-function(input_geom,output_location_geom,input_at_origin=T){
   if(!input_at_origin){ # if it's not already at the origin, shift to 0,0 coord space
     input_geom$geometry<-st_geometry(input_geom)-st_centroid(st_geometry(input_geom))
   }
-    # Over-write geometry to "shift" geometry to be centered the new centroid's location
-      input_geom$geometry<-st_geometry(input_geom)+st_centroid(st_geometry(output_location_geom))
-    # Set CRS
-      st_crs(input_geom)<-st_crs(output_location_geom)
-    return(input_geom)
-  }
-
-cookie<-st_intersection(sf_king,cookie_cutter)
-
-king_rings<-list()
-for(c in 1:length(king)){
-  geom<-st_geometry(king[c])
-  king_rings<-rings+st_centroid(king[c,])
-trans<-st_geometry(a-(st_centroid(a))+st_centroid(b))
+  # Over-write geometry to "shift" geometry to be centered the new centroid's location
+  input_geom$geometry<-st_geometry(input_geom)+st_centroid(st_geometry(output_location_geom))
+  # Set CRS
+  st_crs(input_geom)<-st_crs(output_location_geom)
+  return(input_geom)
 }
 
-
-plot.new()
-plot(buff_1k$geometry,col="red")
-plot(buff_500$geometry,col="blue")
-plot(diff$geometry,col="orange")
-
-
-a<-st_geometry(sf_king[1,])
-b<-st_geometry(sf_king[2,])
-
-plot(st_geometry(sf_king[1:2,]))
-plot(st_geometry(a),add=T,col="red")
-plot(st_geometry(b),add=T,col="blue")
-
-# test out transforming where the polygon is located:
-trans<-st_geometry(a-(st_centroid(a))+st_centroid(b))
-
-plot(trans,add=T,col="orange")
+# Time it by using the cookie-cutter method:
+ptm <- proc.time()
+cookie_cutter<-ConcentricBufferRings(st_centroid(king[1,]),distances=c(500,1000,2000,3000,5000))
+cookies<-list()
+for(loc in 1:nrow(king)){
+  cookie<-st_intersection(king,ShiftCentroid(cookie_cutter,king[loc,]))
+  st_crs(cookie)<-st_crs(cookie_cutter)
+  cookie$area<-st_area(cookie)
+  cookies[[as.character(loc)]]<-data.table(cookie)[,list(GEOID=V1,dist,area)]
+}
+cookies<-rbindlist(cookies)
+shift_time<-proc.time() - ptm
