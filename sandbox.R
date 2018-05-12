@@ -16,18 +16,14 @@ bg_poly <- st_read("/Users/stubbsrw/Documents/git_code/AreaComp/data/nhgis_shape
 st_crs(bg_poly) # Looks like albers equal area conic, which is great!
 
 # To make things more tractable, let's only play with 1 state, Washington, in King County:
-king<-st_sf(data.table(bg_poly)[STATEFP10=="53"&COUNTYFP10=="033",list(as.character(GISJOIN),geometry)][1:50]) # parsing it as a data.table, returning it to sf
-
-###########################################
-# Generate a "Cookie Cutter" by creating 1
-# Set of concentric rings for each nb buffer,
-# then shift the rings from one location
-# to the next, gathering information
+king<-st_sf(data.table(bg_poly)[STATEFP10=="53"&COUNTYFP10=="033",list(GISJOIN=as.character(GISJOIN),geometry)]) # parsing it as a data.table, returning it to sf
 
 
-#' ConcentricRings
-#' Returns a sf polygon object with geometry centered at 0,0 in the coordinate system of the input geometry.
-
+#' ConcentricBufferRings
+#' Returns a sf polygon object with geometry centered at 0,0 
+#' in the coordinate system of the input geometry, with donuts of increasing
+#' radii based on distance specifications. Distances should be entered in the 
+#' same units as the projection of the input geometry. 
 ConcentricBufferRings<-function(input_geom, distances, at_origin=T){
   
   distances<-sort(distances) #ensure that distances are sorted such that smallest->largest
@@ -89,15 +85,43 @@ ShiftCentroid<-function(input_geom,output_location_geom,input_at_origin=T){
   return(input_geom)
 }
 
-# Time it by using the cookie-cutter method:
-ptm <- proc.time()
-cookie_cutter<-ConcentricBufferRings(st_centroid(king[1,]),distances=c(500,1000,2000,3000,5000))
-cookies<-list()
-for(loc in 1:nrow(king)){
-  cookie<-st_intersection(king,ShiftCentroid(cookie_cutter,king[loc,]))
-  st_crs(cookie)<-st_crs(cookie_cutter)
-  cookie$area<-st_area(cookie)
-  cookies[[as.character(loc)]]<-data.table(cookie)[,list(GEOID=V1,dist,area)]
+#' MakeAreaTable
+#' Generate a table with the area of each sliver and underlying relationship
+MakeAreaTable<-function(underlying_geom,cookie_cutter,sf_point){
+  # Make the cookie-cutout of the underlying geoms and the neighborhood rings
+  cookie<-st_intersection(underlying_geom,ShiftCentroid(cookie_cutter,sf_point))
+  st_crs(cookie)<-st_crs(cookie_cutter) # Set the CRS
+  cookie$area<-st_area(cookie) # Generate an area field
+  return(data.table(cookie)[,!"geometry",with=F])
 }
-cookies<-rbindlist(cookies)
-shift_time<-proc.time() - ptm
+
+
+# Make a cookie-cutter template, such that we take the first feature of the centroid, 
+cookie_cutter<-ConcentricBufferRings(st_centroid(king[1,]),distances=c(500,1000,2000,3000,5000))
+st_crs(cookie_cutter)<-st_crs(king)
+
+# Proof of Concept:
+library(mapview)
+cookie1<-st_intersection(ShiftCentroid(cookie_cutter,king[1,]),king)
+cookie2<-st_intersection(ShiftCentroid(cookie_cutter,king[2,]),king)
+mapview(list(king, cookie1, cookie2),
+        layer.name = c("King County Block Groups", "Cookie Cutter, Loc 1", "Cookie Cutter, Loc 2"),
+        legend=FALSE)
+
+# Generate table, in parallel version
+library(foreach)
+library(doParallel)
+
+# Set up a cluster with the doParallel library
+local_cluster<-makeCluster((detectCores() - 1), type="FORK") # use all but 1 core, "fork" to keep environment
+registerDoParallel(local_cluster) # Register the parallel environment
+
+ptm<-proc.time()
+cookies<-foreach(n = 1:nrow(king), .combine = rbind) %dopar% MakeAreaTable(underlying_geom=king,
+                                                               cookie_cutter=cookie_cutter,
+                                                               sf_point=king[loc,])
+stopCluster(local_cluster)
+foreach_time<-proc.time() - ptm
+
+print(reg_time)
+print(foreach_time)
